@@ -19,3 +19,19 @@
 
 # Go workspace file
 go.work
+
+/vendor/
+*.gz
+*.bz
+*.bz2
+*.xz
+*.7z
+*.zip
+*.db
+*.log
+*.sha256
+
+/bin/cb
+/bin/cbd
+/cb
+/cbd
