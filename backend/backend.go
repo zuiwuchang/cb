@@ -77,6 +77,9 @@ type defaultBackend struct {
 	served uint32
 	d0, d1 *DialerManager
 	locker sync.RWMutex
+
+	rs *rangeServer
+	ip net.IP
 }
 
 func (b *defaultBackend) Get(ctx context.Context) (dialer *Dialer, e error) {
@@ -127,46 +130,46 @@ func (b *defaultBackend) Put(dialer *Dialer, used time.Duration) {
 }
 func (b *defaultBackend) Serve() {
 	var (
-		updated bool
-		count   int
+		fast int
+		e    error
 	)
 	for {
-		updated, count = b.serve()
-		if updated {
-			if count > 20 {
-				time.Sleep(time.Hour)
-			} else if count > 10 {
-				time.Sleep(time.Minute * 30)
-			} else if count > 5 {
-				time.Sleep(time.Minute * 10)
-			} else {
+		if !(b.served == 0 && atomic.CompareAndSwapUint32(&b.served, 0, 1)) {
+			time.Sleep(time.Minute * 30)
+			continue
+		}
+		fast, e = b.singleServe()
+		if e == nil {
+			if fast == 0 {
 				time.Sleep(time.Minute)
+			} else {
+				time.Sleep(time.Hour)
 			}
 		} else {
+			slog.Warn(`get servers fail`,
+				`error`, e,
+				`retrying`, time.Minute,
+			)
 			time.Sleep(time.Minute)
 		}
 	}
 }
 
-func (b *defaultBackend) serve() (updated bool, count int) {
-	if b.served == 0 && atomic.CompareAndSwapUint32(&b.served, 0, 1) {
-		updated, count = b.singleServe()
-	}
-	return
-}
 func (b *defaultBackend) asyncServe() {
 	if b.served == 0 && atomic.CompareAndSwapUint32(&b.served, 0, 1) {
 		go b.singleServe()
 	}
 }
-func (b *defaultBackend) singleServe() (updated bool, count int) {
+
+var errServersNil = errors.New(`servers nil`)
+
+func (b *defaultBackend) singleServe() (fast int, e error) {
 	defer atomic.CompareAndSwapUint32(&b.served, 1, 0)
 	servers, e := b.source.Servers()
 	if e != nil {
-		slog.Warn(`get servers fail`, `error`, e)
 		return
 	} else if len(servers) == 0 {
-		slog.Warn(`servers nil`, `error`, e)
+		e = errServersNil
 		return
 	}
 	dialers := newDialerManager(b.durations, b.min)
@@ -185,7 +188,6 @@ func (b *defaultBackend) singleServe() (updated bool, count int) {
 	b.locker.Unlock()
 
 	last := time.Now()
-	updated = true
 	n := runtime.GOMAXPROCS(0) * 2
 	if n < 8 {
 		n = 8
@@ -197,29 +199,53 @@ func (b *defaultBackend) singleServe() (updated bool, count int) {
 	var wait sync.WaitGroup
 	wait.Add(n)
 	ch := make(chan net.IP)
+	done := make(chan struct{})
+	var closed int32
+	closef := func() {
+		if closed == 0 && atomic.CompareAndSwapInt32(&closed, 0, 1) {
+			close(done)
+		}
+	}
+
 	for i := 0; i < n; i++ {
 		go func() {
-			b.ping(dialers, ch)
+			b.ping(dialers, ch, closef)
 			wait.Done()
 		}()
 	}
-	rs := newRangeServer(servers)
-	var ip net.IP
-	for {
+	rs := b.rs
+	ip := b.ip
+
+	b.rs = nil
+	b.ip = nil
+	if rs == nil {
+		rs = newRangeServer(servers)
 		ip = rs.Get()
-		if ip == nil {
-			break
-		} else if ip.IsPrivate() || !ip.IsGlobalUnicast() {
+	}
+DONE:
+	for ; ip != nil; ip = rs.Get() {
+		if ip.IsPrivate() || !ip.IsGlobalUnicast() {
 			continue
 		}
-		ch <- ip
+		select {
+		case ch <- ip:
+		case <-done:
+			b.rs = rs
+			b.ip = ip
+			break DONE
+		}
 	}
 	close(ch)
 	wait.Wait()
+	count := dialers.Len()
+	fast = dialers.Fast()
 	slog.Info(`ping servers finish`,
 		`used`, time.Since(last),
+		`count`, count,
+		`fast`, fast,
+		`next`, time.Hour,
+		`done`, b.rs != nil,
 	)
-	count = dialers.Len()
 	if !setDialers && count > 0 {
 		b.locker.Lock()
 		b.d0 = b.d1
@@ -228,7 +254,7 @@ func (b *defaultBackend) singleServe() (updated bool, count int) {
 	}
 	return
 }
-func (b *defaultBackend) ping(dialers *DialerManager, ch chan net.IP) {
+func (b *defaultBackend) ping(dialers *DialerManager, ch chan net.IP, closef func()) {
 	var (
 		dialer net.Dialer
 		ip     net.IP
@@ -261,6 +287,9 @@ func (b *defaultBackend) ping(dialers *DialerManager, ch chan net.IP) {
 					},
 				},
 			}, used)
+			if dialers.Len() >= b.max {
+				closef()
+			}
 		}
 	}
 }

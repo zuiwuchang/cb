@@ -94,6 +94,9 @@ func (d *DialerManager) Delete(dialer *Dialer, used time.Duration) (n int) {
 func (d *DialerManager) Len() int {
 	return int(atomic.LoadInt64(&d.count))
 }
+func (d *DialerManager) Fast() int {
+	return d.levels[0].Len()
+}
 func (d *DialerManager) Random() (dialer *Dialer) {
 	for _, level := range d.levels {
 		dialer = level.Random()
