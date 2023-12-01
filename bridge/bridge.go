@@ -2,7 +2,6 @@ package bridge
 
 import (
 	"context"
-	"log"
 	"log/slog"
 	"net"
 	"net/http"
@@ -73,9 +72,6 @@ func (b *Bridge) Handle(pattern string, urlStr string) {
 		last := time.Now()
 
 		c1, _, e := dialer.Dial(urlStr, nil)
-		if e != nil {
-			log.Fatalln(e)
-		}
 		if e != nil {
 			c0.Close()
 			slog.Warn(`dial fail`,
