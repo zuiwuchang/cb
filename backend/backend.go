@@ -20,14 +20,25 @@ type Backend interface {
 	Get(ctx context.Context) (*Dialer, error)
 	Put(dialer *Dialer, used time.Duration)
 	Fail(dialer *Dialer)
+	Info() []Info
 }
-
+type Info struct {
+	Count  int          `json:"count"`
+	Server []ServerInfo `json:"server"`
+}
+type ServerInfo struct {
+	Duration string   `json:"duration"`
+	Count    int      `json:"count"`
+	Address  []string `json:"address"`
+}
 type sortUint []uint
 
 func (a sortUint) Len() int           { return len(a) }
 func (a sortUint) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a sortUint) Less(i, j int) bool { return a[i] < a[j] }
-func New(source Source, port uint16, millisecond []uint) Backend {
+func New(source Source, port uint16, millisecond []uint,
+	min, max int,
+) Backend {
 	switch len(millisecond) {
 	case 0:
 		millisecond = []uint{200, 300, 400}
@@ -40,10 +51,18 @@ func New(source Source, port uint16, millisecond []uint) Backend {
 	for i := 0; i < len(millisecond); i++ {
 		durations[i] = time.Millisecond * time.Duration(millisecond[i])
 	}
+	if min < 10 {
+		min = 10
+	}
+	if max < min*2*3 {
+		max = min * 2 * 3
+	}
 	backend := &defaultBackend{
 		source:    source,
 		port:      int(port),
 		durations: durations,
+		min:       min,
+		max:       max,
 	}
 	go backend.Serve()
 	return backend
@@ -53,6 +72,7 @@ type defaultBackend struct {
 	source    Source
 	port      int
 	durations []time.Duration
+	max, min  int
 
 	served uint32
 	d0, d1 *DialerManager
@@ -75,16 +95,16 @@ func (b *defaultBackend) Get(ctx context.Context) (dialer *Dialer, e error) {
 	}
 	if dialer == nil {
 		e = ErrNoTarget
-		go b.serve()
+		b.asyncServe()
 	}
 	return
 }
 func (b *defaultBackend) Fail(dialer *Dialer) {
 	b.locker.RLock()
 	if b.d1 != nil {
-		b.d1.Fail(dialer)
-		if b.d1.Len() < 10 {
-			go b.serve()
+		n := b.d1.Fail(dialer)
+		if dialer.level == 0 && n <= b.min*4/3 {
+			b.asyncServe()
 		}
 	}
 	if b.d0 != nil {
@@ -95,13 +115,13 @@ func (b *defaultBackend) Fail(dialer *Dialer) {
 func (b *defaultBackend) Put(dialer *Dialer, used time.Duration) {
 	b.locker.RLock()
 	if b.d1 != nil {
-		b.d1.Delete(dialer, used)
+		n := b.d1.Delete(dialer, used)
+		if dialer.level == 0 && n <= b.min*4/3 {
+			b.asyncServe()
+		}
 	}
 	if b.d0 != nil {
-		n := b.d0.Delete(dialer, used)
-		if n < 10 {
-			go b.serve()
-		}
+		b.d0.Delete(dialer, used)
 	}
 	b.locker.RUnlock()
 }
@@ -129,9 +149,18 @@ func (b *defaultBackend) Serve() {
 }
 
 func (b *defaultBackend) serve() (updated bool, count int) {
-	if !(b.served == 0 && atomic.CompareAndSwapUint32(&b.served, 0, 1)) {
-		return
+	if b.served == 0 && atomic.CompareAndSwapUint32(&b.served, 0, 1) {
+		updated, count = b.singleServe()
 	}
+	return
+}
+func (b *defaultBackend) asyncServe() {
+	if b.served == 0 && atomic.CompareAndSwapUint32(&b.served, 0, 1) {
+		go b.singleServe()
+	}
+}
+func (b *defaultBackend) singleServe() (updated bool, count int) {
+	defer atomic.CompareAndSwapUint32(&b.served, 1, 0)
 	servers, e := b.source.Servers()
 	if e != nil {
 		slog.Warn(`get servers fail`, `error`, e)
@@ -140,7 +169,7 @@ func (b *defaultBackend) serve() (updated bool, count int) {
 		slog.Warn(`servers nil`, `error`, e)
 		return
 	}
-	dialers := newDialerManager(b.durations)
+	dialers := newDialerManager(b.durations, b.min)
 	setDialers := false
 	b.locker.Lock()
 	if b.d1 == nil {
@@ -234,4 +263,16 @@ func (b *defaultBackend) ping(dialers *DialerManager, ch chan net.IP) {
 			}, used)
 		}
 	}
+}
+func (b *defaultBackend) Info() (infos []Info) {
+	b.locker.RLock()
+	d0, d1 := b.d0, b.d1
+	b.locker.RUnlock()
+	if d1 != nil {
+		infos = append(infos, d1.Info())
+	}
+	if d0 != nil {
+		infos = append(infos, d0.Info())
+	}
+	return infos
 }

@@ -25,6 +25,7 @@ func New(l net.Listener,
 	backend backend.Backend,
 	pool *pool.Pool,
 ) *Bridge {
+	mux := http.NewServeMux()
 	bridge := &Bridge{
 		l:       l,
 		backend: backend,
@@ -36,9 +37,10 @@ func New(l net.Listener,
 				return true
 			},
 		},
-		mux: http.NewServeMux(),
+		mux: mux,
 	}
-
+	mux.HandleFunc(`/info`, bridge.info)
+	mux.HandleFunc(`/`, bridge.notfound)
 	return bridge
 }
 func (b *Bridge) Serve() (e error) {
@@ -60,7 +62,7 @@ func (b *Bridge) Handle(pattern string, urlStr string) {
 		}
 		defer c0.Close()
 
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
 		dialer, e := b.backend.Get(ctx)
 		cancel()
 		if e != nil {

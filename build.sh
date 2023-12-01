@@ -33,6 +33,10 @@ case "$1" in
     ;;
     run)
         cd "$BashDir/bin"
+        if [[ "$BACKEND_URL" == "" ]];then
+            echo "export BACKEND_URL=your_websocket_url"
+            exit 1
+        fi
         ./cb -s ipv4.txt -r "/api/v1/ws:$BACKEND_URL" -m 200 -m 300
         # ./cb
         exit $?

@@ -35,15 +35,17 @@ type Dialers struct {
 
 	level    int
 	duration time.Duration
+	min      int
 }
 
-func newDialers(level int, duration time.Duration) *Dialers {
+func newDialers(level int, duration time.Duration, min int) *Dialers {
 	return &Dialers{
 		keys:  make(map[*Dialer]bool, 100),
 		items: make([]*Dialer, 0, 100),
 
 		level:    level,
 		duration: duration,
+		min:      min,
 	}
 }
 func NewDialers() *Dialers {
@@ -52,20 +54,20 @@ func NewDialers() *Dialers {
 		items: make([]*Dialer, 0, 100),
 	}
 }
-func (d *Dialers) Add(dialer *Dialer) int {
-	var count int
+func (d *Dialers) Add(dialer *Dialer) (count int, added bool) {
 	d.locker.Lock()
 	if !d.keys[dialer] {
 		d.keys[dialer] = true
 		d.items = append(d.items, dialer)
 		count = len(d.items)
+		added = true
 	}
 	d.locker.Unlock()
-	return count
+	return
 }
-func (d *Dialers) delete(dialer *Dialer) (ok bool) {
+func (d *Dialers) delete(dialer *Dialer) (deleted bool) {
 	if d.keys[dialer] {
-		ok = true
+		deleted = true
 		delete(d.keys, dialer)
 		n := len(d.items)
 		for i := 0; i < n; i++ {
@@ -81,17 +83,17 @@ func (d *Dialers) delete(dialer *Dialer) (ok bool) {
 	}
 	return
 }
-func (d *Dialers) Fail(dialer *Dialer) (n int) {
+func (d *Dialers) Fail(dialer *Dialer) (n int, deleted bool) {
 	d.locker.Lock()
-	d.delete(dialer)
+	deleted = d.delete(dialer)
 	n = len(d.items)
 	d.locker.Unlock()
 	return
 }
-func (d *Dialers) Delete(dialer *Dialer) (n int, ok bool) {
+func (d *Dialers) Delete(dialer *Dialer) (n int, deleted bool) {
 	d.locker.Lock()
-	if len(d.items) > 10 {
-		ok = d.delete(dialer)
+	if len(d.items) > d.min {
+		deleted = d.delete(dialer)
 	}
 	n = len(d.items)
 	d.locker.Unlock()
@@ -115,4 +117,13 @@ func (d *Dialers) Len() int {
 	n := len(d.items)
 	d.locker.RUnlock()
 	return n
+}
+func (d *Dialers) List() (strs []string) {
+	d.locker.RLock()
+	strs = make([]string, len(d.items))
+	for i, dialer := range d.items {
+		strs[i] = dialer.String()
+	}
+	d.locker.RUnlock()
+	return
 }

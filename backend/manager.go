@@ -9,14 +9,14 @@ import (
 type DialerManager struct {
 	min, max time.Duration
 	levels   []*Dialers
-	count    uint64
+	count    int64
 }
 
-func newDialerManager(durations []time.Duration) *DialerManager {
+func newDialerManager(durations []time.Duration, min int) *DialerManager {
 	n := len(durations)
 	levels := make([]*Dialers, n)
 	for i := 0; i < n; i++ {
-		levels[i] = newDialers(i, durations[i])
+		levels[i] = newDialers(i, durations[i], min)
 	}
 	return &DialerManager{
 		min:    durations[0],
@@ -29,28 +29,52 @@ func (d *DialerManager) Add(dialer *Dialer, used time.Duration) {
 	for i := 0; i < count; i++ {
 		if used <= d.levels[i].duration {
 			dialer.level = i
-			count := d.levels[i].Add(dialer)
+			count, added := d.levels[i].Add(dialer)
+			var total int64
+			if added {
+				total = atomic.AddInt64(&d.count, 1)
+			} else {
+				total = atomic.LoadInt64(&d.count)
+			}
 			slog.Info(`add dialer`,
 				`dialer`, dialer,
 				`used`, used,
 				`level`, d.levels[i].duration,
 				`count`, count,
+				`total`, total,
 			)
 		}
 	}
 }
-func (d *DialerManager) Fail(dialer *Dialer) {
+func (d *DialerManager) Fail(dialer *Dialer) int {
 	dialers := d.levels[dialer.level]
-	count := dialers.Fail(dialer)
+	count, deleted := dialers.Fail(dialer)
+	var total int64
+	if deleted {
+		total = atomic.AddInt64(&d.count, -1)
+	} else {
+		total = atomic.LoadInt64(&d.count)
+	}
 	slog.Info(`dialer fail`,
 		`dialer`, dialer,
 		`level`, dialers.duration,
 		`count`, count,
+		`total`, total,
 	)
+	return count
 }
 func (d *DialerManager) Delete(dialer *Dialer, used time.Duration) (n int) {
 	dialers := d.levels[dialer.level]
-	if used > dialers.duration+time.Millisecond*50 {
+	if dialer.level > 1 {
+		count, ok := dialers.Delete(dialer)
+		if ok {
+			slog.Info(`dialer timeout`,
+				`dialer`, dialer,
+				`level`, dialers.duration,
+				`count`, count,
+			)
+		}
+	} else if used > dialers.duration+time.Millisecond*50 {
 		if atomic.AddUint32(&dialer.timeout, 1) > 3 {
 			count, ok := dialers.Delete(dialer)
 			if ok {
@@ -66,11 +90,9 @@ func (d *DialerManager) Delete(dialer *Dialer, used time.Duration) (n int) {
 	}
 	return
 }
-func (d *DialerManager) Len() (sum int) {
-	for _, level := range d.levels {
-		sum += level.Len()
-	}
-	return
+
+func (d *DialerManager) Len() int {
+	return int(atomic.LoadInt64(&d.count))
 }
 func (d *DialerManager) Random() (dialer *Dialer) {
 	for _, level := range d.levels {
@@ -78,6 +100,16 @@ func (d *DialerManager) Random() (dialer *Dialer) {
 		if dialer != nil {
 			break
 		}
+	}
+	return
+}
+func (d *DialerManager) Info() (ret Info) {
+	ret.Server = make([]ServerInfo, len(d.levels))
+	for i, level := range d.levels {
+		ret.Server[i].Duration = level.duration.String()
+		ret.Server[i].Address = level.List()
+		ret.Server[i].Count = len(ret.Server[i].Address)
+		ret.Count += ret.Server[i].Count
 	}
 	return
 }

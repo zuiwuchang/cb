@@ -32,6 +32,7 @@ func createRoot() *cobra.Command {
 		routes            []string
 		certFile, keyFile string
 		millisecond       []uint
+		min, max          int
 	)
 	cmd := &cobra.Command{
 		Use:   App,
@@ -142,7 +143,9 @@ func createRoot() *cobra.Command {
 			slog.Info(`serve`, `listen`, listen, `port`, port, `tls`, useTLS)
 
 			bridge := bridge.New(l,
-				backend.New(source, port, millisecond),
+				backend.New(source, port, millisecond,
+					min, max,
+				),
 				// 80 mb
 				pool.New(1024*128, 80),
 			)
@@ -182,7 +185,8 @@ func createRoot() *cobra.Command {
 		300,
 		400,
 	}, `set the delay in milliseconds to find a server`)
-
+	flags.IntVar(&min, `min`, 50, `minimum number of IPs`)
+	flags.IntVar(&max, `max`, 2000, `maximum number of IPs`)
 	return cmd
 }
 
