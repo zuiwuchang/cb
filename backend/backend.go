@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"math"
 	"net"
 	"runtime"
 	"sort"
@@ -56,7 +55,7 @@ type defaultBackend struct {
 	durations []time.Duration
 
 	served uint32
-	d0, d1 *Dialers
+	d0, d1 *DialerManager
 	locker sync.RWMutex
 }
 
@@ -83,8 +82,8 @@ func (b *defaultBackend) Get(ctx context.Context) (dialer *Dialer, e error) {
 func (b *defaultBackend) Fail(dialer *Dialer) {
 	b.locker.RLock()
 	if b.d1 != nil {
-		n := b.d1.Fail(dialer)
-		if n < 10 {
+		b.d1.Fail(dialer)
+		if b.d1.Len() < 10 {
 			go b.serve()
 		}
 	}
@@ -94,15 +93,12 @@ func (b *defaultBackend) Fail(dialer *Dialer) {
 	b.locker.RUnlock()
 }
 func (b *defaultBackend) Put(dialer *Dialer, used time.Duration) {
-	if used != 0 && used < time.Millisecond*300 {
-		return
-	}
 	b.locker.RLock()
 	if b.d1 != nil {
-		b.d1.Delete(dialer)
+		b.d1.Delete(dialer, used)
 	}
 	if b.d0 != nil {
-		n := b.d0.Delete(dialer)
+		n := b.d0.Delete(dialer, used)
 		if n < 10 {
 			go b.serve()
 		}
@@ -144,7 +140,7 @@ func (b *defaultBackend) serve() (updated bool, count int) {
 		slog.Warn(`servers nil`, `error`, e)
 		return
 	}
-	dialers := NewDialers()
+	dialers := newDialerManager(b.durations)
 	setDialers := false
 	b.locker.Lock()
 	if b.d1 == nil {
@@ -165,27 +161,29 @@ func (b *defaultBackend) serve() (updated bool, count int) {
 	if n < 8 {
 		n = 8
 	}
-	if n > len(servers) {
-		n = len(servers)
-	}
-	slog.Info(`start found targets`,
+	slog.Info(`start ping servers`,
 		`goroutine`, n,
 		`servers`, servers,
 	)
 	var wait sync.WaitGroup
 	wait.Add(n)
-	ch := make(chan Server)
+	ch := make(chan net.IP)
 	for i := 0; i < n; i++ {
 		go func() {
-			for server := range ch {
-				b.ping(dialers, server)
-			}
+			b.ping(dialers, ch)
 			wait.Done()
 		}()
 	}
-
-	for i := 0; i < len(servers); i++ {
-		ch <- servers[i]
+	rs := newRangeServer(servers)
+	var ip net.IP
+	for {
+		ip = rs.Get()
+		if ip == nil {
+			break
+		} else if ip.IsPrivate() || !ip.IsGlobalUnicast() {
+			continue
+		}
+		ch <- ip
 	}
 	close(ch)
 	wait.Wait()
@@ -201,24 +199,18 @@ func (b *defaultBackend) serve() (updated bool, count int) {
 	}
 	return
 }
-func (b *defaultBackend) ping(dialers *Dialers, server Server) {
+func (b *defaultBackend) ping(dialers *DialerManager, ch chan net.IP) {
 	var (
-		dialer     net.Dialer
-		ipnet      = server.IPNet
-		ipnetStr   = ipnet.String()
-		e          error
-		c          net.Conn
-		last       time.Time
-		used       time.Duration
-		ones, bits = ipnet.Mask.Size()
-		total      = int(math.Pow(2, float64((bits - ones))))
-		index      = -1
+		dialer net.Dialer
+		ip     net.IP
+		e      error
+		c      net.Conn
+		last   time.Time
+		used   time.Duration
 	)
-	found := 0
-	for ip := server.IP; ip != nil && ipnet.Contains(ip); ip = b.source.Next(ip) {
-		index++
-		if ipnet.IP.IsMulticast() ||
-			!ipnet.IP.IsGlobalUnicast() {
+	for ip = range ch {
+		if ip.IsMulticast() ||
+			!ip.IsGlobalUnicast() {
 			continue
 		}
 		addr := &net.TCPAddr{
@@ -232,26 +224,14 @@ func (b *defaultBackend) ping(dialers *Dialers, server Server) {
 		if e == nil {
 			c.Close()
 			used = time.Since(last)
-
-			if used < time.Millisecond*400 {
-				found++
-				slog.Info(`found `+addr.String(),
-					`used`, used,
-					`found`, found,
-					`index`, index,
-					`total`, total,
-					`ipnet`, ipnetStr,
-				)
-				dialers.Add(&Dialer{
-					addr: addr,
-					dialer: &websocket.Dialer{
-						NetDial: func(network, _ string) (net.Conn, error) {
-							return net.Dial(network, addr.String())
-						},
+			dialers.Add(&Dialer{
+				addr: addr,
+				dialer: &websocket.Dialer{
+					NetDial: func(network, _ string) (net.Conn, error) {
+						return net.Dial(network, addr.String())
 					},
-				})
-				continue
-			}
+				},
+			}, used)
 		}
 	}
 }

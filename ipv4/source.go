@@ -83,9 +83,9 @@ func readServers(r io.Reader) (servers []backend.Server) {
 		}
 		ip, ipnet, e = net.ParseCIDR(s)
 		if e == nil {
-			servers = append(servers, backend.Server{
-				IP:    ip,
-				IPNet: ipnet,
+			servers = append(servers, Server{
+				ip:    ip,
+				ipnet: ipnet,
 			})
 		} else {
 			slog.Warn(`parse cidr fail`,

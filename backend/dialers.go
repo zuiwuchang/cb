@@ -2,18 +2,20 @@ package backend
 
 import (
 	"context"
-	"log/slog"
 	"math/rand"
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
 
 type Dialer struct {
-	addr   *net.TCPAddr
-	dialer *websocket.Dialer
+	addr    *net.TCPAddr
+	dialer  *websocket.Dialer
+	level   int
+	timeout uint32
 }
 
 func (d *Dialer) String() string {
@@ -30,15 +32,27 @@ type Dialers struct {
 	keys   map[*Dialer]bool
 	items  []*Dialer
 	locker sync.RWMutex
+
+	level    int
+	duration time.Duration
 }
 
+func newDialers(level int, duration time.Duration) *Dialers {
+	return &Dialers{
+		keys:  make(map[*Dialer]bool, 100),
+		items: make([]*Dialer, 0, 100),
+
+		level:    level,
+		duration: duration,
+	}
+}
 func NewDialers() *Dialers {
 	return &Dialers{
 		keys:  make(map[*Dialer]bool, 100),
 		items: make([]*Dialer, 0, 100),
 	}
 }
-func (d *Dialers) Add(dialer *Dialer) {
+func (d *Dialers) Add(dialer *Dialer) int {
 	var count int
 	d.locker.Lock()
 	if !d.keys[dialer] {
@@ -47,10 +61,11 @@ func (d *Dialers) Add(dialer *Dialer) {
 		count = len(d.items)
 	}
 	d.locker.Unlock()
-	slog.Info(`add target`, `target`, dialer.String(), `count`, count)
+	return count
 }
-func (d *Dialers) delete(dialer *Dialer) {
+func (d *Dialers) delete(dialer *Dialer) (ok bool) {
 	if d.keys[dialer] {
+		ok = true
 		delete(d.keys, dialer)
 		n := len(d.items)
 		for i := 0; i < n; i++ {
@@ -64,6 +79,7 @@ func (d *Dialers) delete(dialer *Dialer) {
 			}
 		}
 	}
+	return
 }
 func (d *Dialers) Fail(dialer *Dialer) (n int) {
 	d.locker.Lock()
@@ -72,10 +88,10 @@ func (d *Dialers) Fail(dialer *Dialer) (n int) {
 	d.locker.Unlock()
 	return
 }
-func (d *Dialers) Delete(dialer *Dialer) (n int) {
+func (d *Dialers) Delete(dialer *Dialer) (n int, ok bool) {
 	d.locker.Lock()
 	if len(d.items) > 10 {
-		d.delete(dialer)
+		ok = d.delete(dialer)
 	}
 	n = len(d.items)
 	d.locker.Unlock()

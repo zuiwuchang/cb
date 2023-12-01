@@ -2,6 +2,28 @@ package ipv4
 
 import "net"
 
+type Server struct {
+	ip    net.IP
+	ipnet *net.IPNet
+}
+
+func (s Server) IP() net.IP {
+	return s.ip
+}
+func (s Server) IPNet() *net.IPNet {
+	return s.ipnet
+}
+func (s Server) Next(ip net.IP) net.IP {
+	if ip == nil {
+		return nil
+	}
+	ip = Next(ip)
+	if s.ipnet.Contains(ip) {
+		return ip
+	}
+	return nil
+}
+
 func Next(ip net.IP) net.IP {
 	next := ip.To4()
 	if next != nil {
