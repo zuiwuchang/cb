@@ -1,0 +1,14 @@
+[Unit]
+Description=Cloudflare Websocket Bridge
+After=network-online.target
+Wants=network-online.target
+ 
+[Service]
+Type=simple
+ExecStart=/opt/cb/cb -m 180 -m 280
+KillMode=control-group
+Restart=on-failure
+LimitNOFILE=100000
+ 
+[Install]
+WantedBy=multi-user.target

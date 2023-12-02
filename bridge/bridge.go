@@ -9,26 +9,22 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/zuiwuchang/cb/backend"
-	"github.com/zuiwuchang/cb/pool"
 )
 
 type Bridge struct {
 	l        net.Listener
 	backend  backend.Backend
-	pool     *pool.Pool
 	upgrader *websocket.Upgrader
 	mux      *http.ServeMux
 }
 
 func New(l net.Listener,
 	backend backend.Backend,
-	pool *pool.Pool,
 ) *Bridge {
 	mux := http.NewServeMux()
 	bridge := &Bridge{
 		l:       l,
 		backend: backend,
-		pool:    pool,
 		upgrader: &websocket.Upgrader{
 			ReadBufferSize:  1024 * 32,
 			WriteBufferSize: 1024 * 32,
@@ -84,8 +80,8 @@ func (b *Bridge) Handle(pattern string, urlStr string) {
 		b.backend.Put(dialer, time.Since(last))
 
 		ch := make(chan bool)
-		go bridgeWS(b.pool, c0, c1, ch)
-		go bridgeWS(b.pool, c1, c0, ch)
+		go bridgeWS(c0, c1, ch)
+		go bridgeWS(c1, c0, ch)
 
 		<-ch
 		timer := time.NewTimer(time.Second)
@@ -104,7 +100,7 @@ func (b *Bridge) Handle(pattern string, urlStr string) {
 	})
 }
 
-func bridgeWS(p *pool.Pool, w, r *websocket.Conn, ch chan<- bool) {
+func bridgeWS(w, r *websocket.Conn, ch chan<- bool) {
 	for {
 		t, p, e := r.ReadMessage()
 		if e != nil {

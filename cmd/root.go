@@ -13,7 +13,6 @@ import (
 	"github.com/zuiwuchang/cb/backend"
 	"github.com/zuiwuchang/cb/bridge"
 	"github.com/zuiwuchang/cb/ipv4"
-	"github.com/zuiwuchang/cb/pool"
 	"github.com/zuiwuchang/cb/version"
 )
 
@@ -146,8 +145,6 @@ func createRoot() *cobra.Command {
 				backend.New(source, port, millisecond,
 					min, max,
 				),
-				// 80 mb
-				pool.New(1024*128, 80),
 			)
 			for _, item := range items {
 				bridge.Handle(item.path, item.url)

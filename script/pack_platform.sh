@@ -118,14 +118,11 @@ if [[ -f "$name" ]];then
 fi
 source=(
     "$target"
-    bridge.jsonnet
-    portal.jsonnet
 )
 other=()
-if [[ "${GOOS}_$GOARCH" == "linux_amd64" ]];then
+if [[ "${GOOS}" == "linux_amd64" ]];then
     other=(
-        reverse-bridge.service
-        reverse-portal.service
+        cb.service
     )
 fi
 exec="${args[@]} ${source[@]} ${other[@]}"
