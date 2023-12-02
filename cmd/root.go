@@ -190,7 +190,7 @@ func createRoot() *cobra.Command {
 		400,
 	}, `set the delay in milliseconds to find a server`)
 	flags.IntVar(&min, `min`, 50, `minimum number of IPs`)
-	flags.IntVar(&max, `max`, 2000, `maximum number of IPs`)
+	flags.IntVar(&max, `max`, 1000, `maximum number of IPs`)
 	flags.IntVarP(&cache, `cache`, `c`, 30, `how many connections to cache`)
 	flags.BoolVarP(&direct, `direct`, `d`, false, `forward websocket directly`)
 

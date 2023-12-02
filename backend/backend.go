@@ -310,7 +310,7 @@ func (b *defaultBackend) ping(dialers *DialerManager, ch chan net.IP, closef fun
 					WriteBufferSize: 1024 * 32,
 				},
 			}, used)
-			if dialers.Len() >= b.max {
+			if dialers.Len() >= b.max && dialers.Fast() >= b.min {
 				closef()
 			}
 		}

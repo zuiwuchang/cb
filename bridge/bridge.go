@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -75,9 +76,23 @@ func (b *Bridge) Handle(pattern string, urlStr string) {
 			return
 		}
 		defer c0.Close()
-
 		var c1 *websocket.Conn
+		var reader io.Reader
+		var readerType int
 		if dialer != nil {
+			for {
+				readerType, reader, e = c0.NextReader()
+				if e != nil {
+					return
+				} else if websocket.BinaryMessage == readerType || websocket.TextMessage == readerType {
+					break
+				} else {
+					_, e = io.Copy(io.Discard, reader)
+					if e != nil {
+						return
+					}
+				}
+			}
 			c1, _, e = dialer.Dial(urlStr, nil)
 		} else {
 			ctx, cancel := context.WithTimeout(r.Context(), time.Second)
@@ -91,11 +106,11 @@ func (b *Bridge) Handle(pattern string, urlStr string) {
 
 		ch := make(chan bool)
 		if dialer == nil {
-			go bridgeWS(c0, c1, ch, true)
-			go bridgeWS(c1, c0, ch, true)
+			go bridgeWS(c0, c1, ch, nil, 0)
+			go bridgeWS(c1, c0, ch, reader, readerType)
 		} else {
-			go bridgeWS(c0, c1, ch, false)
-			go bridgeWS(c1, c0, ch, false)
+			go bridgeWS(c0, c1, ch, nil, 0)
+			go bridgeWS(c1, c0, ch, reader, readerType)
 		}
 
 		<-ch
@@ -115,19 +130,44 @@ func (b *Bridge) Handle(pattern string, urlStr string) {
 	})
 }
 
-func bridgeWS(w, r *websocket.Conn, ch chan<- bool, filter bool) {
+func bridgeWS(w, r *websocket.Conn, ch chan<- bool,
+	reader io.Reader, readerType int,
+) {
+	var (
+		dst io.WriteCloser
+		e   error
+	)
+	if reader != nil {
+		dst, e = w.NextWriter(readerType)
+		if e != nil {
+			ch <- true
+			return
+		}
+		_, e = io.Copy(dst, reader)
+		if e != nil {
+			ch <- true
+			return
+		}
+		e = dst.Close()
+		if e != nil {
+			ch <- true
+			return
+		}
+	}
 	for {
-		t, p, e := r.ReadMessage()
+		readerType, reader, e = r.NextReader()
 		if e != nil {
 			break
 		}
-		if filter && t == websocket.PingMessage {
-			continue
+		dst, e := w.NextWriter(readerType)
+		if e != nil {
+			break
 		}
-		if t == websocket.PongMessage {
-			continue
+		_, e = io.Copy(dst, reader)
+		if e != nil {
+			break
 		}
-		e = w.WriteMessage(t, p)
+		e = dst.Close()
 		if e != nil {
 			break
 		}
