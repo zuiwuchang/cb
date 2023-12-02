@@ -55,7 +55,19 @@ func (b *Bridge) Handle(pattern string, urlStr string) {
 		`path`, pattern,
 		`connect`, urlStr,
 	)
-	cache := newCache(urlStr, b.backend, b.cache)
+	var cache *Cache
+	var dialer *websocket.Dialer
+	if b.direct {
+		dialer = &websocket.Dialer{
+			NetDial: func(network, addr string) (net.Conn, error) {
+				return net.Dial(network, addr)
+			},
+			ReadBufferSize:  1024 * 32,
+			WriteBufferSize: 1024 * 32,
+		}
+	} else {
+		cache = newCache(urlStr, b.backend, b.cache)
+	}
 	b.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 		c0, e := b.upgrader.Upgrade(w, r, nil)
 		if e != nil {
@@ -64,17 +76,27 @@ func (b *Bridge) Handle(pattern string, urlStr string) {
 		}
 		defer c0.Close()
 
-		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
-		c1, e := cache.Dial(ctx)
-		cancel()
+		var c1 *websocket.Conn
+		if dialer != nil {
+			c1, _, e = dialer.Dial(urlStr, nil)
+		} else {
+			ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+			c1, e = cache.Dial(ctx)
+			cancel()
+		}
 		if e != nil {
 			c0.Close()
 			return
 		}
 
 		ch := make(chan bool)
-		go bridgeWS(c0, c1, ch)
-		go bridgeWS(c1, c0, ch)
+		if dialer == nil {
+			go bridgeWS(c0, c1, ch, true)
+			go bridgeWS(c1, c0, ch, true)
+		} else {
+			go bridgeWS(c0, c1, ch, false)
+			go bridgeWS(c1, c0, ch, false)
+		}
 
 		<-ch
 		timer := time.NewTimer(time.Second)
@@ -93,11 +115,14 @@ func (b *Bridge) Handle(pattern string, urlStr string) {
 	})
 }
 
-func bridgeWS(w, r *websocket.Conn, ch chan<- bool) {
+func bridgeWS(w, r *websocket.Conn, ch chan<- bool, filter bool) {
 	for {
 		t, p, e := r.ReadMessage()
 		if e != nil {
 			break
+		}
+		if filter && t == websocket.PingMessage {
+			continue
 		}
 		if t == websocket.PongMessage {
 			continue

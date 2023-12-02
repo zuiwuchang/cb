@@ -306,6 +306,8 @@ func (b *defaultBackend) ping(dialers *DialerManager, ch chan net.IP, closef fun
 					NetDial: func(network, _ string) (net.Conn, error) {
 						return net.Dial(network, addr.String())
 					},
+					ReadBufferSize:  1024 * 32,
+					WriteBufferSize: 1024 * 32,
 				},
 			}, used)
 			if dialers.Len() >= b.max {

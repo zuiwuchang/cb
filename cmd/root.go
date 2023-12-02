@@ -77,7 +77,7 @@ func createRoot() *cobra.Command {
 				switch u.Scheme {
 				case `ws`:
 					s := u.Port()
-					if s != `` && s != `80` {
+					if !direct && s != `` && s != `80` {
 						slog.Error(`ws port must be 80`)
 						os.Exit(1)
 					}
@@ -89,7 +89,7 @@ func createRoot() *cobra.Command {
 					}
 				case `wss`:
 					s := u.Port()
-					if s != `` && s != `443` {
+					if !direct && s != `` && s != `443` {
 						slog.Error(`ws port must be 443`)
 						os.Exit(1)
 					}
