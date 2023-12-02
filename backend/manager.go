@@ -97,6 +97,9 @@ func (d *DialerManager) Len() int {
 func (d *DialerManager) Fast() int {
 	return d.levels[0].Len()
 }
+func (d *DialerManager) GetFast() *Dialer {
+	return d.levels[0].Random()
+}
 func (d *DialerManager) Random() (dialer *Dialer) {
 	for _, level := range d.levels {
 		dialer = level.Random()

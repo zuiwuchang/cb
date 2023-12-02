@@ -16,10 +16,12 @@ type Bridge struct {
 	backend  backend.Backend
 	upgrader *websocket.Upgrader
 	mux      *http.ServeMux
+	cache    int
 }
 
 func New(l net.Listener,
 	backend backend.Backend,
+	cache int,
 ) *Bridge {
 	mux := http.NewServeMux()
 	bridge := &Bridge{
@@ -32,7 +34,8 @@ func New(l net.Listener,
 				return true
 			},
 		},
-		mux: mux,
+		mux:   mux,
+		cache: cache,
 	}
 	mux.HandleFunc(`/info`, bridge.info)
 	mux.HandleFunc(`/`, bridge.notfound)
@@ -44,11 +47,13 @@ func (b *Bridge) Serve() (e error) {
 func (b *Bridge) ServeTLS(certFile, keyFile string) (e error) {
 	return http.ServeTLS(b.l, b.mux, certFile, keyFile)
 }
+
 func (b *Bridge) Handle(pattern string, urlStr string) {
 	slog.Info(`add route`,
 		`path`, pattern,
 		`connect`, urlStr,
 	)
+	cache := newCache(urlStr, b.backend, b.cache)
 	b.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 		c0, e := b.upgrader.Upgrade(w, r, nil)
 		if e != nil {
@@ -58,30 +63,17 @@ func (b *Bridge) Handle(pattern string, urlStr string) {
 		defer c0.Close()
 
 		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
-		dialer, e := b.backend.Get(ctx)
+		c1, e := cache.Dial(ctx)
+
 		cancel()
 		if e != nil {
 			c0.Close()
-			slog.Warn(`get dialer fail`, `error`, e)
 			return
 		}
-		last := time.Now()
-
-		c1, _, e := dialer.Dial(urlStr, nil)
-		if e != nil {
-			c0.Close()
-			slog.Warn(`dial fail`,
-				`error`, e,
-				`dialer`, dialer,
-			)
-			b.backend.Fail(dialer)
-			return
-		}
-		b.backend.Put(dialer, time.Since(last))
 
 		ch := make(chan bool)
-		go bridgeWS(c0, c1, ch)
-		go bridgeWS(c1, c0, ch)
+		go bridgeWS(c0, c1, ch, false)
+		go bridgeWS(c1, c0, ch, true)
 
 		<-ch
 		timer := time.NewTimer(time.Second)
@@ -100,15 +92,24 @@ func (b *Bridge) Handle(pattern string, urlStr string) {
 	})
 }
 
-func bridgeWS(w, r *websocket.Conn, ch chan<- bool) {
+func bridgeWS(w, r *websocket.Conn, ch chan<- bool, ping bool) {
 	for {
 		t, p, e := r.ReadMessage()
 		if e != nil {
 			break
 		}
+		if t == websocket.PongMessage {
+			continue
+		}
 		e = w.WriteMessage(t, p)
 		if e != nil {
 			break
+		}
+		if ping {
+			e = w.WriteMessage(websocket.PongMessage, []byte("cerberus is an idea"))
+			if e != nil {
+				break
+			}
 		}
 	}
 	ch <- true

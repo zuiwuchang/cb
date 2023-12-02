@@ -17,6 +17,7 @@ import (
 var ErrNoTarget = errors.New(`not found any server`)
 
 type Backend interface {
+	GetFast(ctx context.Context) (*Dialer, error)
 	Get(ctx context.Context) (*Dialer, error)
 	Put(dialer *Dialer, used time.Duration)
 	Fail(dialer *Dialer)
@@ -82,6 +83,26 @@ type defaultBackend struct {
 	ip net.IP
 }
 
+func (b *defaultBackend) GetFast(ctx context.Context) (dialer *Dialer, e error) {
+	b.locker.RLock()
+	d0, d1 := b.d0, b.d1
+	b.locker.RUnlock()
+
+	if d1 != nil {
+		dialer = d1.GetFast()
+		if dialer != nil {
+			return
+		}
+	}
+	if d0 != nil {
+		dialer = d0.GetFast()
+	}
+	if dialer == nil {
+		e = ErrNoTarget
+		b.asyncServe()
+	}
+	return
+}
 func (b *defaultBackend) Get(ctx context.Context) (dialer *Dialer, e error) {
 	b.locker.RLock()
 	d0, d1 := b.d0, b.d1
