@@ -120,7 +120,7 @@ source=(
     "$target"
 )
 other=()
-if [[ "${GOOS}" == "linux_amd64" ]];then
+if [[ "${GOOS}" == "linux" ]];then
     other=(
         cb.service
     )
