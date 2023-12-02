@@ -17,11 +17,12 @@ type Bridge struct {
 	upgrader *websocket.Upgrader
 	mux      *http.ServeMux
 	cache    int
+	direct   bool
 }
 
 func New(l net.Listener,
 	backend backend.Backend,
-	cache int,
+	cache int, direct bool,
 ) *Bridge {
 	mux := http.NewServeMux()
 	bridge := &Bridge{
@@ -34,8 +35,9 @@ func New(l net.Listener,
 				return true
 			},
 		},
-		mux:   mux,
-		cache: cache,
+		mux:    mux,
+		cache:  cache,
+		direct: direct,
 	}
 	mux.HandleFunc(`/info`, bridge.info)
 	mux.HandleFunc(`/`, bridge.notfound)
@@ -64,7 +66,6 @@ func (b *Bridge) Handle(pattern string, urlStr string) {
 
 		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
 		c1, e := cache.Dial(ctx)
-
 		cancel()
 		if e != nil {
 			c0.Close()
@@ -72,8 +73,8 @@ func (b *Bridge) Handle(pattern string, urlStr string) {
 		}
 
 		ch := make(chan bool)
-		go bridgeWS(c0, c1, ch, false)
-		go bridgeWS(c1, c0, ch, true)
+		go bridgeWS(c0, c1, ch)
+		go bridgeWS(c1, c0, ch)
 
 		<-ch
 		timer := time.NewTimer(time.Second)
@@ -92,7 +93,7 @@ func (b *Bridge) Handle(pattern string, urlStr string) {
 	})
 }
 
-func bridgeWS(w, r *websocket.Conn, ch chan<- bool, ping bool) {
+func bridgeWS(w, r *websocket.Conn, ch chan<- bool) {
 	for {
 		t, p, e := r.ReadMessage()
 		if e != nil {
@@ -104,12 +105,6 @@ func bridgeWS(w, r *websocket.Conn, ch chan<- bool, ping bool) {
 		e = w.WriteMessage(t, p)
 		if e != nil {
 			break
-		}
-		if ping {
-			e = w.WriteMessage(websocket.PongMessage, []byte("cerberus is an idea"))
-			if e != nil {
-				break
-			}
 		}
 	}
 	ch <- true

@@ -33,6 +33,7 @@ func createRoot() *cobra.Command {
 		millisecond       []uint
 		min, max          int
 		cache             int
+		direct            bool
 	)
 	cmd := &cobra.Command{
 		Use:   App,
@@ -141,12 +142,16 @@ func createRoot() *cobra.Command {
 			}
 			useTLS := certFile != `` && keyFile != ``
 			slog.Info(`serve`, `listen`, listen, `port`, port, `tls`, useTLS, `cache`, cache)
-
-			bridge := bridge.New(l,
-				backend.New(source, port, millisecond,
+			var bd backend.Backend
+			if !direct {
+				bd = backend.New(source, port, millisecond,
 					min, max,
-				),
+				)
+			}
+			bridge := bridge.New(l,
+				bd,
 				cache,
+				direct,
 			)
 			for _, item := range items {
 				bridge.Handle(item.path, item.url)
@@ -187,6 +192,8 @@ func createRoot() *cobra.Command {
 	flags.IntVar(&min, `min`, 50, `minimum number of IPs`)
 	flags.IntVar(&max, `max`, 2000, `maximum number of IPs`)
 	flags.IntVarP(&cache, `cache`, `c`, 30, `how many connections to cache`)
+	flags.BoolVarP(&direct, `direct`, `d`, false, `forward websocket directly`)
+
 	return cmd
 }
 
