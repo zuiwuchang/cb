@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net"
@@ -34,6 +36,7 @@ func createRoot() *cobra.Command {
 		min, max          int
 		cache             int
 		direct            bool
+		password          string
 	)
 	cmd := &cobra.Command{
 		Use:   App,
@@ -120,6 +123,10 @@ func createRoot() *cobra.Command {
 					os.Exit(1)
 				}
 			}
+			if cache > 0 || direct {
+				b := sha1.Sum([]byte(password))
+				password = hex.EncodeToString(b[:])
+			}
 
 			var (
 				source backend.Source
@@ -150,8 +157,7 @@ func createRoot() *cobra.Command {
 			}
 			bridge := bridge.New(l,
 				bd,
-				cache,
-				direct,
+				cache, direct, password,
 			)
 			for _, item := range items {
 				bridge.Handle(item.path, item.url)
@@ -193,7 +199,7 @@ func createRoot() *cobra.Command {
 	flags.IntVar(&max, `max`, 1000, `maximum number of IPs`)
 	flags.IntVarP(&cache, `cache`, `c`, 30, `how many connections to cache`)
 	flags.BoolVarP(&direct, `direct`, `d`, false, `forward websocket directly`)
-
+	flags.StringVarP(&password, `password`, `p`, `cerberus is an idea`, `cache password`)
 	return cmd
 }
 

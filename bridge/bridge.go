@@ -2,7 +2,6 @@ package bridge
 
 import (
 	"context"
-	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/zuiwuchang/cb/backend"
-	"github.com/zuiwuchang/cb/bridge/internal/prepare"
 )
 
 type Bridge struct {
@@ -21,11 +19,12 @@ type Bridge struct {
 	mux      *http.ServeMux
 	cache    int
 	direct   bool
+	password string
 }
 
 func New(l net.Listener,
 	backend backend.Backend,
-	cache int, direct bool,
+	cache int, direct bool, password string,
 ) *Bridge {
 	mux := http.NewServeMux()
 	bridge := &Bridge{
@@ -38,9 +37,10 @@ func New(l net.Listener,
 				return true
 			},
 		},
-		mux:    mux,
-		cache:  cache,
-		direct: direct,
+		mux:      mux,
+		cache:    cache,
+		direct:   direct,
+		password: password,
 	}
 	mux.HandleFunc(`/info`, bridge.info)
 	mux.HandleFunc(`/`, bridge.notfound)
@@ -69,7 +69,7 @@ func (b *Bridge) Handle(pattern string, urlStr string) {
 			WriteBufferSize: 1024 * 32,
 		}
 	} else {
-		cache = newCache(urlStr, b.backend, b.cache)
+		cache = newCache(urlStr, b.backend, b.cache, b.password)
 	}
 	b.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 		c0, e := b.upgrader.Upgrade(w, r, nil)
@@ -79,8 +79,6 @@ func (b *Bridge) Handle(pattern string, urlStr string) {
 		}
 		defer c0.Close()
 		var c1 *websocket.Conn
-		var reader io.Reader
-		var readerType int
 		if dialer != nil {
 			e = b.prepare(c0)
 			if e != nil {
@@ -99,11 +97,11 @@ func (b *Bridge) Handle(pattern string, urlStr string) {
 
 		ch := make(chan bool)
 		if dialer == nil {
-			go bridgeWS(c0, c1, ch, nil, 0)
-			go bridgeWS(c1, c0, ch, reader, readerType)
+			go bridgeWS(c0, c1, ch)
+			go bridgeWS(c1, c0, ch)
 		} else {
-			go bridgeWS(c0, c1, ch, nil, 0)
-			go bridgeWS(c1, c0, ch, reader, readerType)
+			go bridgeWS(c0, c1, ch)
+			go bridgeWS(c1, c0, ch)
 		}
 
 		<-ch
@@ -123,101 +121,23 @@ func (b *Bridge) Handle(pattern string, urlStr string) {
 	})
 }
 
-var errPrepareTimeout = errors.New(`prepare timemout`)
-var errUnexpectedType = errors.New(`prepare unexpected type`)
-
-func (b *Bridge) prepare(c *websocket.Conn) (e error) {
-	timer := time.NewTimer(time.Second * 5)
-	ch := make(chan error, 1)
-	go b.prepareRead(c, ch)
-	select {
-	case <-timer.C:
-		e = errPrepareTimeout
-	case e = <-ch:
-		if !timer.Stop() {
-			<-timer.C
-		}
-		if e != nil {
-			return
-		}
-		e = <-ch
-	}
-	return
-}
-func (b *Bridge) prepareRead(c *websocket.Conn, ch chan<- error) {
-	var (
-		readerType int
-		reader     io.Reader
-		e          error
-		connected  bool
-		dst        = prepare.Get()
-	)
-	for {
-		readerType, reader, e = c.NextReader()
-		if e != nil {
-			ch <- e
-			return
-		} else if websocket.BinaryMessage != readerType {
-			ch <- errUnexpectedType
-			return
-		}
-		e = prepare.Read(dst, reader)
-		if e != nil {
-			ch <- e
-			return
-		}
-		switch dst[0] {
-		case prepare.Connect:
-			ch <- nil
-			connected = true
-		case prepare.Pong:
-			if !connected {
-
-			}
-		case prepare.Dial:
-			if !connected {
-
-			}
-		case prepare.ConnectDial:
-
-		}
-	}
-}
-
-func bridgeWS(w, r *websocket.Conn, ch chan<- bool,
-	reader io.Reader, readerType int,
-) {
+func bridgeWS(w, r *websocket.Conn, ch chan<- bool) {
 	var (
 		dst io.WriteCloser
+		src io.Reader
+		t   int
 		e   error
 	)
-	if reader != nil {
-		dst, e = w.NextWriter(readerType)
-		if e != nil {
-			ch <- true
-			return
-		}
-		_, e = io.Copy(dst, reader)
-		if e != nil {
-			ch <- true
-			return
-		}
-		e = dst.Close()
-		if e != nil {
-			ch <- true
-			return
-		}
-	}
 	for {
-		readerType, reader, e = r.NextReader()
+		t, src, e = r.NextReader()
 		if e != nil {
 			break
 		}
-		dst, e := w.NextWriter(readerType)
+		dst, e = w.NextWriter(t)
 		if e != nil {
 			break
 		}
-		_, e = io.Copy(dst, reader)
+		_, e = io.Copy(dst, src)
 		if e != nil {
 			break
 		}

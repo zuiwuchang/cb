@@ -1,8 +1,11 @@
 package prepare
 
 import (
+	"errors"
 	"fmt"
 	"io"
+
+	"github.com/gorilla/websocket"
 )
 
 const MessageLen = 1 + 40
@@ -13,6 +16,12 @@ const (
 	Dial
 	ConnectDial
 )
+
+var ErrUnexpectedType = errors.New(`prepare: unexpected type`)
+var ErrTimeout = errors.New(`prepare: timemout`)
+var ErrPassword = errors.New(`prepare: password not matched`)
+var ErrForbidden = errors.New(`prepare: forbidden`)
+var ErrPong = errors.New(`prepare: expect pong`)
 
 func Read(dst []byte, r io.Reader) (e error) {
 	dst = dst[1:MessageLen]
@@ -31,5 +40,16 @@ func Read(dst []byte, r io.Reader) (e error) {
 	default:
 		e = fmt.Errorf(`unknow prepare type: %v`, dst[0])
 	}
+	return
+}
+func ReadWebsocket(dst []byte, ws *websocket.Conn) (e error) {
+	t, r, e := ws.NextReader()
+	if e != nil {
+		return
+	} else if t != websocket.BinaryMessage {
+		e = ErrUnexpectedType
+		return
+	}
+	e = Read(dst, r)
 	return
 }

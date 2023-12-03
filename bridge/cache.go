@@ -7,6 +7,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/zuiwuchang/cb/backend"
+	"github.com/zuiwuchang/cb/bridge/internal/prepare"
 )
 
 type Conn struct {
@@ -18,11 +19,16 @@ type Cache struct {
 	backend backend.Backend
 	url     string
 	list    chan *Conn
-	ch      chan *Conn
-	cache   []*Conn
+
+	ch    chan *Conn
+	cache []*Conn
+
+	_connect, _pong, _dial, _connectDial []byte
 }
 
-func newCache(url string, backend backend.Backend, n int) (cache *Cache) {
+func newCache(url string, backend backend.Backend,
+	n int, password string,
+) (cache *Cache) {
 	var (
 		list chan *Conn
 		ch   chan *Conn
@@ -39,6 +45,21 @@ func newCache(url string, backend backend.Backend, n int) (cache *Cache) {
 		cache:   make([]*Conn, 0, n+1),
 	}
 	if n > 0 {
+		b := make([]byte, prepare.MessageLen*2+2)
+		b[0] = prepare.Pong
+		b[1] = prepare.Dial
+		cache._pong = b[:1]
+		cache._dial = b[1:2]
+		b = b[2:]
+
+		b[0] = prepare.Connect
+		copy(b[1:], password)
+		cache._connect = b
+		b = b[prepare.MessageLen:]
+		b[0] = prepare.ConnectDial
+		copy(b[1:], password)
+		cache._connectDial = b
+
 		go cache.serve()
 		go func() {
 			for node := range list {
@@ -176,22 +197,64 @@ func (c *Cache) Dial(ctx context.Context) (conn *websocket.Conn, e error) {
 	return
 }
 func (c *Cache) get(ctx context.Context) (conn *websocket.Conn, e error) {
-	for {
-		select {
-		case <-ctx.Done():
-			e = ctx.Err()
-			return
-		case cache := <-c.ch:
-			conn = cache.Conn
-			now := time.Now()
-			if !now.After(cache.Expired) {
-				if now.Sub(cache.Last) > time.Second*20 {
-					e = conn.WriteMessage(websocket.PingMessage, nil)
-				}
+	select {
+	case <-ctx.Done():
+		e = ctx.Err()
+		return
+	case cache := <-c.ch:
+		conn = cache.Conn
+		if time.Since(cache.Last) <= time.Second*5 {
+			e = conn.WriteMessage(websocket.BinaryMessage, c._dial)
+			if e != nil {
+				conn.Close()
 				return
 			}
+			return
 		}
 	}
+
+	ch := make(chan error, 1)
+	timer := time.NewTimer(time.Second)
+	go func() {
+		ch <- c.writeReadPong(conn, nil)
+	}()
+	select {
+	case <-timer.C:
+		conn.Close()
+		e = context.DeadlineExceeded
+	case e = <-ch:
+		if !timer.Stop() {
+			<-timer.C
+		}
+		if e != nil {
+			conn.Close()
+			return
+		}
+		e = conn.WriteMessage(websocket.BinaryMessage, c._dial)
+		if e != nil {
+			conn.Close()
+			return
+		}
+	}
+	return
+}
+func (c *Cache) writeReadPong(conn *websocket.Conn, buf []byte) (e error) {
+	e = conn.WriteMessage(websocket.BinaryMessage, c._pong)
+	if e != nil {
+		return
+	}
+	if len(buf) < 1 {
+		buf = prepare.Get()
+		defer prepare.Put(buf)
+	}
+	e = prepare.ReadWebsocket(buf, conn)
+	if e != nil {
+		return
+	}
+	if buf[0] != prepare.Pong {
+		e = prepare.ErrPong
+	}
+	return
 }
 func (c *Cache) dial(ctx context.Context) (conn *websocket.Conn, e error) {
 	dialer, e := c.backend.Get(ctx)
@@ -210,5 +273,12 @@ func (c *Cache) dial(ctx context.Context) (conn *websocket.Conn, e error) {
 		return
 	}
 	c.backend.Put(dialer, time.Since(last))
+
+	if c.ch != nil {
+		e = conn.WriteMessage(websocket.BinaryMessage, c._connectDial)
+		if e != nil {
+			conn.Close()
+		}
+	}
 	return
 }
