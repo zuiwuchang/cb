@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/zuiwuchang/cb/backend"
+	"github.com/zuiwuchang/cb/bridge/internal/prepare"
 )
 
 type Bridge struct {
@@ -80,18 +82,9 @@ func (b *Bridge) Handle(pattern string, urlStr string) {
 		var reader io.Reader
 		var readerType int
 		if dialer != nil {
-			for {
-				readerType, reader, e = c0.NextReader()
-				if e != nil {
-					return
-				} else if websocket.BinaryMessage == readerType || websocket.TextMessage == readerType {
-					break
-				} else {
-					_, e = io.Copy(io.Discard, reader)
-					if e != nil {
-						return
-					}
-				}
+			e = b.prepare(c0)
+			if e != nil {
+				return
 			}
 			c1, _, e = dialer.Dial(urlStr, nil)
 		} else {
@@ -128,6 +121,67 @@ func (b *Bridge) Handle(pattern string, urlStr string) {
 			c1.Close()
 		}
 	})
+}
+
+var errPrepareTimeout = errors.New(`prepare timemout`)
+var errUnexpectedType = errors.New(`prepare unexpected type`)
+
+func (b *Bridge) prepare(c *websocket.Conn) (e error) {
+	timer := time.NewTimer(time.Second * 5)
+	ch := make(chan error, 1)
+	go b.prepareRead(c, ch)
+	select {
+	case <-timer.C:
+		e = errPrepareTimeout
+	case e = <-ch:
+		if !timer.Stop() {
+			<-timer.C
+		}
+		if e != nil {
+			return
+		}
+		e = <-ch
+	}
+	return
+}
+func (b *Bridge) prepareRead(c *websocket.Conn, ch chan<- error) {
+	var (
+		readerType int
+		reader     io.Reader
+		e          error
+		connected  bool
+		dst        = prepare.Get()
+	)
+	for {
+		readerType, reader, e = c.NextReader()
+		if e != nil {
+			ch <- e
+			return
+		} else if websocket.BinaryMessage != readerType {
+			ch <- errUnexpectedType
+			return
+		}
+		e = prepare.Read(dst, reader)
+		if e != nil {
+			ch <- e
+			return
+		}
+		switch dst[0] {
+		case prepare.Connect:
+			ch <- nil
+			connected = true
+		case prepare.Pong:
+			if !connected {
+
+			}
+		case prepare.Dial:
+			if !connected {
+
+			}
+		case prepare.ConnectDial:
+
+		}
+	}
 }
 
 func bridgeWS(w, r *websocket.Conn, ch chan<- bool,
