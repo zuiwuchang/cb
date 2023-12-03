@@ -19,6 +19,7 @@ type Cache struct {
 	backend backend.Backend
 	url     string
 	list    chan *Conn
+	recover chan *Conn
 
 	ch    chan *Conn
 	cache []*Conn
@@ -30,16 +31,19 @@ func newCache(url string, backend backend.Backend,
 	n int, password string,
 ) (cache *Cache) {
 	var (
-		list chan *Conn
-		ch   chan *Conn
+		recover chan *Conn
+		list    chan *Conn
+		ch      chan *Conn
 	)
 	if n > 0 {
+		recover = make(chan *Conn)
 		list = make(chan *Conn, n)
 		ch = make(chan *Conn)
 	}
 	cache = &Cache{
 		backend: backend,
 		url:     url,
+		recover: recover,
 		list:    list,
 		ch:      ch,
 		cache:   make([]*Conn, 0, n+1),
@@ -61,15 +65,32 @@ func newCache(url string, backend backend.Backend,
 		cache._connectDial = b
 
 		go cache.serve()
-		go func() {
-			for node := range list {
-				ch <- node
-			}
-		}()
+		go cache.servePipe()
 	}
 	return
 }
-
+func (c *Cache) servePipe() {
+	var (
+		node  *Conn
+		timer = time.NewTicker(time.Second * 10)
+	)
+	for {
+		if node == nil {
+			node = <-c.list
+		}
+		select {
+		case c.ch <- node:
+			node = nil
+		case <-timer.C:
+			if time.Since(node.Last) >= time.Second*35 {
+				go func(conn *Conn) {
+					c.recover <- conn
+				}(node)
+				node = nil
+			}
+		}
+	}
+}
 func (c *Cache) serve() {
 	var (
 		ctx = context.Background()
