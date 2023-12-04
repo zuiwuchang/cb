@@ -3,6 +3,7 @@ package bridge
 import (
 	"context"
 	"log/slog"
+	"net"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -26,6 +27,14 @@ type Cache struct {
 	endPing  chan bool
 
 	_connect, _pong, _dial, _connectDial []byte
+}
+
+var defaultDialer = &websocket.Dialer{
+	NetDial: func(network, addr string) (net.Conn, error) {
+		return net.Dial(network, addr)
+	},
+	ReadBufferSize:  1024 * 32,
+	WriteBufferSize: 1024 * 32,
 }
 
 func newCache(url string, backend backend.Backend,
@@ -56,7 +65,6 @@ func newCache(url string, backend backend.Backend,
 		cache.sendPing = make(chan *Conn)
 		cache.endPing = make(chan bool)
 		cache.cache = make([]*Conn, 0, n+1)
-
 		go cache.serve()
 		go cache.pingGoRoutine()
 	}
@@ -324,7 +332,27 @@ func (c *Cache) writeReadPong(conn *websocket.Conn, buf []byte) (e error) {
 func (c *Cache) dial(ctx context.Context) (conn *websocket.Conn, e error) {
 	dialer, e := c.backend.Get(ctx)
 	if e != nil {
-		slog.Warn(`get dialer fail`, `error`, e)
+		if e == backend.ErrNoTarget {
+			conn, _, e = defaultDialer.Dial(c.url, nil)
+			if e != nil {
+				slog.Warn(`default dial fail`,
+					`error`, e,
+					`dialer`, dialer,
+				)
+				return
+			}
+			if c.list != nil {
+				e = conn.WriteMessage(websocket.BinaryMessage, c._connectDial)
+				if e == nil {
+					slog.Info(`dial from default`)
+				} else {
+					conn.Close()
+				}
+			}
+			return
+		} else {
+			slog.Warn(`get dialer fail`, `error`, e)
+		}
 		return
 	}
 	last := time.Now()
@@ -339,7 +367,7 @@ func (c *Cache) dial(ctx context.Context) (conn *websocket.Conn, e error) {
 	}
 	c.backend.Put(dialer, time.Since(last))
 
-	if c.ch != nil {
+	if c.list != nil {
 		e = conn.WriteMessage(websocket.BinaryMessage, c._connectDial)
 		if e != nil {
 			conn.Close()

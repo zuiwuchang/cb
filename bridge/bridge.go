@@ -98,13 +98,8 @@ func (b *Bridge) Handle(pattern string, urlStr string) {
 		}
 
 		ch := make(chan bool)
-		if dialer == nil {
-			go bridgeWS(c0, c1, ch)
-			go bridgeWS(c1, c0, ch)
-		} else {
-			go bridgeWS(c0, c1, ch)
-			go bridgeWS(c1, c0, ch)
-		}
+		go bridgeWS(c0, c1, ch)
+		go bridgeWS(c1, c0, ch)
 
 		<-ch
 		timer := time.NewTimer(time.Second)
