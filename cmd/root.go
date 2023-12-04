@@ -148,7 +148,7 @@ func createRoot() *cobra.Command {
 				os.Exit(1)
 			}
 			useTLS := certFile != `` && keyFile != ``
-			slog.Info(`serve`, `listen`, listen, `port`, port, `tls`, useTLS, `cache`, cache)
+			slog.Info(`serve`, `listen`, listen, `port`, port, `tls`, useTLS, `cache`, cache, `min`, min, `max`, max)
 			var bd backend.Backend
 			if !direct {
 				bd = backend.New(source, port, millisecond,
@@ -197,7 +197,7 @@ func createRoot() *cobra.Command {
 	}, `set the delay in milliseconds to find a server`)
 	flags.IntVar(&min, `min`, 50, `minimum number of IPs`)
 	flags.IntVar(&max, `max`, 1000, `maximum number of IPs`)
-	flags.IntVarP(&cache, `cache`, `c`, 30, `how many connections to cache`)
+	flags.IntVarP(&cache, `cache`, `c`, 0, `how many connections to cache`)
 	flags.BoolVarP(&direct, `direct`, `d`, false, `forward websocket directly`)
 	flags.StringVarP(&password, `password`, `p`, `cerberus is an idea`, `cache password`)
 	return cmd

@@ -24,7 +24,7 @@ var ErrForbidden = errors.New(`prepare: forbidden`)
 var ErrPong = errors.New(`prepare: expect pong`)
 
 func Read(dst []byte, r io.Reader) (e error) {
-	dst = dst[1:MessageLen]
+	dst = dst[:MessageLen]
 	_, e = r.Read(dst[:1])
 	if e != nil {
 		return

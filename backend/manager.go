@@ -12,11 +12,11 @@ type DialerManager struct {
 	count    int64
 }
 
-func newDialerManager(durations []time.Duration, min int) *DialerManager {
+func newDialerManager(durations []time.Duration, min, max int) *DialerManager {
 	n := len(durations)
 	levels := make([]*Dialers, n)
 	for i := 0; i < n; i++ {
-		levels[i] = newDialers(i, durations[i], min)
+		levels[i] = newDialers(i, durations[i], min, max)
 	}
 	return &DialerManager{
 		min:    durations[0],
@@ -33,16 +33,14 @@ func (d *DialerManager) Add(dialer *Dialer, used time.Duration) {
 			var total int64
 			if added {
 				total = atomic.AddInt64(&d.count, 1)
-			} else {
-				total = atomic.LoadInt64(&d.count)
+				slog.Debug(`add dialer`,
+					`dialer`, dialer,
+					`used`, used,
+					`level`, d.levels[i].duration,
+					`count`, count,
+					`total`, total,
+				)
 			}
-			slog.Info(`add dialer`,
-				`dialer`, dialer,
-				`used`, used,
-				`level`, d.levels[i].duration,
-				`count`, count,
-				`total`, total,
-			)
 		}
 	}
 }

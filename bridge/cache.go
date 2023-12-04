@@ -105,6 +105,10 @@ func (c *Cache) serve() {
 			if e != nil {
 				continue
 			}
+			e = ws.WriteMessage(websocket.BinaryMessage, c._connect)
+			if e != nil {
+				continue
+			}
 			now = time.Now()
 			c.cache = append(c.cache,
 				&Conn{

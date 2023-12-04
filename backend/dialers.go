@@ -35,10 +35,10 @@ type Dialers struct {
 
 	level    int
 	duration time.Duration
-	min      int
+	min, max int
 }
 
-func newDialers(level int, duration time.Duration, min int) *Dialers {
+func newDialers(level int, duration time.Duration, min, max int) *Dialers {
 	return &Dialers{
 		keys:  make(map[*Dialer]bool, 100),
 		items: make([]*Dialer, 0, 100),
@@ -46,6 +46,7 @@ func newDialers(level int, duration time.Duration, min int) *Dialers {
 		level:    level,
 		duration: duration,
 		min:      min,
+		max:      max,
 	}
 }
 func NewDialers() *Dialers {
@@ -56,11 +57,14 @@ func NewDialers() *Dialers {
 }
 func (d *Dialers) Add(dialer *Dialer) (count int, added bool) {
 	d.locker.Lock()
-	if !d.keys[dialer] {
-		d.keys[dialer] = true
-		d.items = append(d.items, dialer)
-		count = len(d.items)
-		added = true
+	count = len(d.items)
+	if count < d.max {
+		if !d.keys[dialer] {
+			d.keys[dialer] = true
+			d.items = append(d.items, dialer)
+			count = len(d.items)
+			added = true
+		}
 	}
 	d.locker.Unlock()
 	return

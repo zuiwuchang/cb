@@ -82,6 +82,7 @@ func (b *Bridge) Handle(pattern string, urlStr string) {
 		if dialer != nil {
 			e = b.prepare(c0)
 			if e != nil {
+				slog.Warn(`ws prepare fail`, `error`, e)
 				return
 			}
 			c1, _, e = dialer.Dial(urlStr, nil)

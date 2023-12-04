@@ -193,7 +193,7 @@ func (b *defaultBackend) singleServe() (fast int, e error) {
 		e = errServersNil
 		return
 	}
-	dialers := newDialerManager(b.durations, b.min)
+	dialers := newDialerManager(b.durations, b.min, b.max)
 	setDialers := false
 	b.locker.Lock()
 	if b.d1 == nil {
