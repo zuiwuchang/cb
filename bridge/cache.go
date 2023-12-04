@@ -78,15 +78,19 @@ func (c *Cache) serve() {
 		if count == 0 {
 			select {
 			case <-timer.C:
+				slog.Info(`cache ping start`, `count`, count)
 				c.ping(buf)
 				count = len(c.cache)
+				slog.Info(`cache ping end`, `count`, count)
 			default:
 			}
 		} else {
 			select {
 			case <-timer.C:
+				slog.Info(`cache ping start`, `count`, count)
 				c.ping(buf)
 				count = len(c.cache)
+				slog.Info(`cache ping end`, `count`, count)
 			case c.list <- c.cache[0]:
 				count--
 				c.cache[0] = c.cache[count]
@@ -119,6 +123,7 @@ func (c *Cache) serve() {
 					Conn: ws,
 				},
 			)
+			slog.Info(`cache new`, `count`, len(c.cache))
 		}
 	}
 }
@@ -133,7 +138,7 @@ func (c *Cache) ping(buf []byte) {
 		for i := count - 1; i >= 0; i-- {
 			node = c.cache[i]
 			now := time.Now()
-			if now.Sub(node.Last) >= time.Second*20 {
+			if now.Sub(node.Last) >= time.Second*25 {
 				e = c.writeReadPong(node.Conn, buf)
 				if e == nil {
 					node.Last = now
@@ -168,7 +173,7 @@ PING_LOOG:
 			}
 		}
 		now := time.Now()
-		if now.Sub(node.Last) >= time.Second*20 {
+		if now.Sub(node.Last) >= time.Second*25 {
 			if !c.pingOne(node, buf) {
 				continue
 			}
@@ -268,7 +273,7 @@ func (c *Cache) get(ctx context.Context) (conn *websocket.Conn, e error) {
 		return
 	}
 	conn = cache.Conn
-	if time.Since(cache.Last) <= time.Second*20 {
+	if time.Since(cache.Last) <= time.Second*25 {
 		e = conn.WriteMessage(websocket.BinaryMessage, c._dial)
 		if e != nil {
 			conn.Close()
