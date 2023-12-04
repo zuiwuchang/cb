@@ -11,18 +11,19 @@ import (
 )
 
 type Conn struct {
-	Expired time.Time
-	Last    time.Time
-	Conn    *websocket.Conn
+	Last time.Time
+	Conn *websocket.Conn
 }
 type Cache struct {
 	backend backend.Backend
 	url     string
-	list    chan *Conn
-	recover chan *Conn
 
+	list  chan *Conn
 	ch    chan *Conn
 	cache []*Conn
+
+	sendPing chan *Conn
+	endPing  chan bool
 
 	_connect, _pong, _dial, _connectDial []byte
 }
@@ -30,23 +31,9 @@ type Cache struct {
 func newCache(url string, backend backend.Backend,
 	n int, password string,
 ) (cache *Cache) {
-	var (
-		recover chan *Conn
-		list    chan *Conn
-		ch      chan *Conn
-	)
-	if n > 0 {
-		recover = make(chan *Conn)
-		list = make(chan *Conn, n)
-		ch = make(chan *Conn)
-	}
 	cache = &Cache{
 		backend: backend,
 		url:     url,
-		recover: recover,
-		list:    list,
-		ch:      ch,
-		cache:   make([]*Conn, 0, n+1),
 	}
 	if n > 0 {
 		b := make([]byte, prepare.MessageLen*2+2)
@@ -64,40 +51,25 @@ func newCache(url string, backend backend.Backend,
 		copy(b[1:], password)
 		cache._connectDial = b
 
+		cache.ch = make(chan *Conn)
+		cache.list = make(chan *Conn, n)
+		cache.sendPing = make(chan *Conn)
+		cache.endPing = make(chan bool)
+		cache.cache = make([]*Conn, 0, n+1)
+
 		go cache.serve()
-		go cache.servePipe()
+		go cache.pingGoRoutine()
 	}
 	return
 }
-func (c *Cache) servePipe() {
-	var (
-		node  *Conn
-		timer = time.NewTicker(time.Second * 10)
-	)
-	for {
-		if node == nil {
-			node = <-c.list
-		}
-		select {
-		case c.ch <- node:
-			node = nil
-		case <-timer.C:
-			if time.Since(node.Last) >= time.Second*35 {
-				go func(conn *Conn) {
-					c.recover <- conn
-				}(node)
-				node = nil
-			}
-		}
-	}
-}
+
 func (c *Cache) serve() {
 	var (
-		ctx = context.Background()
-		ws  *websocket.Conn
-		now time.Time
-
-		ping  = time.NewTicker(time.Second * 40)
+		ctx   = context.Background()
+		ws    *websocket.Conn
+		now   time.Time
+		buf   = prepare.Get()
+		timer = time.NewTicker(time.Second * 20)
 		count int
 	)
 
@@ -105,15 +77,15 @@ func (c *Cache) serve() {
 		count = len(c.cache)
 		if count == 0 {
 			select {
-			case <-ping.C:
-				c.ping()
+			case <-timer.C:
+				c.ping(buf)
 				count = len(c.cache)
 			default:
 			}
 		} else {
 			select {
-			case <-ping.C:
-				c.ping()
+			case <-timer.C:
+				c.ping(buf)
 				count = len(c.cache)
 			case c.list <- c.cache[0]:
 				count--
@@ -136,35 +108,39 @@ func (c *Cache) serve() {
 			now = time.Now()
 			c.cache = append(c.cache,
 				&Conn{
-					Expired: now.Add(time.Hour),
-					Last:    now,
-					Conn:    ws,
+					Last: now,
+					Conn: ws,
 				},
 			)
 		}
 	}
 }
-func (c *Cache) ping() {
-	var e error
-	var node *Conn
-	count := len(c.cache)
-	for i := count - 1; i >= 0; i-- {
-		node = c.cache[i]
-		now := time.Now()
-		if node.Expired.Before(now) {
-			node.Conn.Close()
-			c.cache[i] = c.cache[len(c.cache)-1]
-			c.cache = c.cache[:len(c.cache)-1]
-		} else if now.Sub(node.Last) > time.Second*20 {
-			e = node.Conn.WriteMessage(websocket.PingMessage, nil)
-			if e != nil {
-				node.Conn.Close()
-				c.cache[i] = c.cache[len(c.cache)-1]
-				c.cache = c.cache[:len(c.cache)-1]
+func (c *Cache) ping(buf []byte) {
+	var (
+		e     error
+		node  *Conn
+		count = len(c.cache)
+		last  int
+	)
+	if count > 0 {
+		for i := count - 1; i >= 0; i-- {
+			node = c.cache[i]
+			now := time.Now()
+			if now.Sub(node.Last) >= time.Second*20 {
+				e = c.writeReadPong(node.Conn, buf)
+				if e == nil {
+					node.Last = now
+				} else {
+					node.Conn.Close()
+					last = len(c.cache) - 1
+					c.cache[i] = c.cache[last]
+					c.cache = c.cache[:last]
+				}
 			}
 		}
 	}
 
+PING_LOOG:
 	for {
 		count = len(c.cache)
 		if count == 0 {
@@ -174,37 +150,91 @@ func (c *Cache) ping() {
 				return
 			}
 		} else {
+			last = count - 1
 			select {
 			case node = <-c.list:
-			case c.ch <- c.cache[count-1]:
-				c.cache = c.cache[:count-1]
+			case c.ch <- c.cache[last]:
+				c.cache = c.cache[:last]
+				continue PING_LOOG
 			default:
 				return
 			}
 		}
 		now := time.Now()
-		if node.Expired.Before(now) {
-			node.Conn.Close()
-			continue
-		} else if now.Sub(node.Last) > time.Second*20 {
-			e = node.Conn.WriteMessage(websocket.PingMessage, nil)
-			if e != nil {
-				node.Conn.Close()
+		if now.Sub(node.Last) >= time.Second*20 {
+			if !c.pingOne(node, buf) {
 				continue
 			}
 		}
 		c.cache = append(c.cache, node)
 	}
 }
-func (c *Cache) Dial(ctx context.Context) (conn *websocket.Conn, e error) {
-	if c.ch != nil {
-		for i := 0; i < 2; i++ {
-			conn, e = c.get(ctx)
+func (c *Cache) pingOne(node *Conn, buf []byte) (ok bool) {
+	var (
+		e           error
+		count, last int
+	)
+	for {
+		count = len(c.cache)
+		if count == 0 {
+			e = c.writeReadPong(node.Conn, buf)
 			if e == nil {
-				return
-			} else if ctx.Err() != nil {
+				node.Last = time.Now()
+				ok = true
+			} else {
+				node.Conn.Close()
+			}
+			return
+		} else {
+			last = count - 1
+			select {
+			case c.sendPing <- node:
+				for {
+					count = len(c.cache)
+					if count == 0 {
+						ok = <-c.endPing
+						return
+					} else {
+						last = count - 1
+						select {
+						case ok = <-c.endPing:
+							return
+						case c.ch <- c.cache[last]:
+							c.cache = c.cache[:last]
+						}
+					}
+				}
+			case c.ch <- c.cache[last]:
+				c.cache = c.cache[:last]
+			}
+		}
+	}
+}
+func (c *Cache) pingGoRoutine() {
+	var (
+		buf = prepare.Get()
+		e   error
+	)
+	for node := range c.sendPing {
+		e = c.writeReadPong(node.Conn, buf)
+		if e == nil {
+			node.Last = time.Now()
+			c.endPing <- true
+		} else {
+			node.Conn.Close()
+			c.endPing <- false
+		}
+	}
+}
+func (c *Cache) Dial(ctx context.Context) (conn *websocket.Conn, e error) {
+	if c.list != nil {
+		conn, e = c.get(ctx)
+		if e == nil {
+			if conn != nil {
 				return
 			}
+		} else if ctx.Err() != nil {
+			return
 		}
 	}
 	for i := 0; i < 2; i++ {
@@ -218,35 +248,35 @@ func (c *Cache) Dial(ctx context.Context) (conn *websocket.Conn, e error) {
 	return
 }
 func (c *Cache) get(ctx context.Context) (conn *websocket.Conn, e error) {
+	var cache *Conn
 	select {
 	case <-ctx.Done():
 		e = ctx.Err()
 		return
-	case cache := <-c.ch:
-		conn = cache.Conn
-		if time.Since(cache.Last) <= time.Second*5 {
-			e = conn.WriteMessage(websocket.BinaryMessage, c._dial)
-			if e != nil {
-				conn.Close()
-				return
-			}
+	case cache = <-c.list:
+	case cache = <-c.ch:
+	default:
+		return
+	}
+	conn = cache.Conn
+	if time.Since(cache.Last) <= time.Second*20 {
+		e = conn.WriteMessage(websocket.BinaryMessage, c._dial)
+		if e != nil {
+			conn.Close()
 			return
 		}
+		return
 	}
 
 	ch := make(chan error, 1)
-	timer := time.NewTimer(time.Second)
 	go func() {
 		ch <- c.writeReadPong(conn, nil)
 	}()
 	select {
-	case <-timer.C:
+	case <-ctx.Done():
 		conn.Close()
-		e = context.DeadlineExceeded
+		e = ctx.Err()
 	case e = <-ch:
-		if !timer.Stop() {
-			<-timer.C
-		}
 		if e != nil {
 			conn.Close()
 			return
