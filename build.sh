@@ -41,7 +41,7 @@ case "$1" in
             echo "export BACKEND_PASSWORD=your_password"
             exit 1
         fi
-        ./cb -s ipv4.txt -p "$BACKEND_PASSWORD" -r "/api/v1/ws:$BACKEND_URL" -m 180 -m 280 --min 10 --max 60 -c 5
+        ./cb -s ipv4.txt -p "$BACKEND_PASSWORD" -r "/api/v1/ws:$BACKEND_URL" -m 200 -m 300 --min 10 --max 60 -c 5
         # ./cb
         exit $?
     ;;
