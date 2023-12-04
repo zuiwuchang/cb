@@ -80,6 +80,7 @@ func (b *Bridge) Handle(pattern string, urlStr string) {
 		defer c0.Close()
 		var c1 *websocket.Conn
 		if dialer != nil {
+			// slog.Info(`new prepare`)
 			e = b.prepare(c0)
 			if e != nil {
 				slog.Warn(`ws prepare fail`, `error`, e)

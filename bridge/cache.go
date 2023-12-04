@@ -98,15 +98,18 @@ func (c *Cache) serve() {
 			dialer, e := c.backend.Get(ctx)
 			if e != nil {
 				// dialer not exists
+				slog.Warn(`cache dialer not exists`, `sleep`, time.Second)
 				time.Sleep(time.Second)
 				continue
 			}
 			ws, _, e = dialer.Dial(c.url, nil)
 			if e != nil {
+				slog.Warn(`cache dial fail`, `error`, e)
 				continue
 			}
 			e = ws.WriteMessage(websocket.BinaryMessage, c._connect)
 			if e != nil {
+				slog.Warn(`cache connect fail`, `error`, e)
 				continue
 			}
 			now = time.Now()
@@ -235,6 +238,7 @@ func (c *Cache) Dial(ctx context.Context) (conn *websocket.Conn, e error) {
 		conn, e = c.get(ctx)
 		if e == nil {
 			if conn != nil {
+				slog.Info(`dial from cache`)
 				return
 			}
 		} else if ctx.Err() != nil {
@@ -244,6 +248,7 @@ func (c *Cache) Dial(ctx context.Context) (conn *websocket.Conn, e error) {
 	for i := 0; i < 2; i++ {
 		conn, e = c.dial(ctx)
 		if e == nil {
+			slog.Info(`dial from net`)
 			return
 		} else if ctx.Err() != nil {
 			return
