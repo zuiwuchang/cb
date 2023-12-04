@@ -29,7 +29,7 @@ func (d *Dialer) DialContext(ctx context.Context, urlStr string, requestHeader h
 }
 
 type Dialers struct {
-	keys   map[*Dialer]bool
+	keys   map[string]*Dialer
 	items  []*Dialer
 	locker sync.RWMutex
 
@@ -40,7 +40,7 @@ type Dialers struct {
 
 func newDialers(level int, duration time.Duration, min, max int) *Dialers {
 	return &Dialers{
-		keys:  make(map[*Dialer]bool, 100),
+		keys:  make(map[string]*Dialer, 100),
 		items: make([]*Dialer, 0, 100),
 
 		level:    level,
@@ -49,18 +49,14 @@ func newDialers(level int, duration time.Duration, min, max int) *Dialers {
 		max:      max,
 	}
 }
-func NewDialers() *Dialers {
-	return &Dialers{
-		keys:  make(map[*Dialer]bool, 100),
-		items: make([]*Dialer, 0, 100),
-	}
-}
+
 func (d *Dialers) Add(dialer *Dialer) (count int, added bool) {
+	key := dialer.String()
 	d.locker.Lock()
 	count = len(d.items)
 	if count < d.max {
-		if !d.keys[dialer] {
-			d.keys[dialer] = true
+		if _, exists := d.keys[key]; !exists {
+			d.keys[key] = dialer
 			d.items = append(d.items, dialer)
 			count = len(d.items)
 			added = true
@@ -70,9 +66,10 @@ func (d *Dialers) Add(dialer *Dialer) (count int, added bool) {
 	return
 }
 func (d *Dialers) delete(dialer *Dialer) (deleted bool) {
-	if d.keys[dialer] {
+	key := dialer.String()
+	if old, exists := d.keys[key]; exists && old == dialer {
 		deleted = true
-		delete(d.keys, dialer)
+		delete(d.keys, key)
 		n := len(d.items)
 		for i := 0; i < n; i++ {
 			if d.items[i] == dialer {
