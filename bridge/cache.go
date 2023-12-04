@@ -78,7 +78,7 @@ func (c *Cache) serve() {
 		if count == 0 {
 			select {
 			case <-timer.C:
-				slog.Info(`cache ping start`, `count`, count)
+				slog.Info(`cache ping start`, `count`, count+len(c.list))
 				c.ping(buf)
 				count = len(c.cache)
 				slog.Info(`cache ping end`, `count`, count)
@@ -87,7 +87,7 @@ func (c *Cache) serve() {
 		} else {
 			select {
 			case <-timer.C:
-				slog.Info(`cache ping start`, `count`, count)
+				slog.Info(`cache ping start`, `count`, count+len(c.list))
 				c.ping(buf)
 				count = len(c.cache)
 				slog.Info(`cache ping end`, `count`, count)
@@ -123,7 +123,7 @@ func (c *Cache) serve() {
 					Conn: ws,
 				},
 			)
-			slog.Info(`cache new`, `count`, len(c.cache))
+			slog.Info(`cache new`, `count`, len(c.cache)+len(c.list))
 		}
 	}
 }
