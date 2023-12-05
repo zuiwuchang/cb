@@ -63,6 +63,7 @@ func (d *Dialers) Add(dialer *Dialer) (count int, added bool) {
 		}
 	}
 	d.locker.Unlock()
+	// fmt.Println(`--------------------add`, key, added)
 	return
 }
 func (d *Dialers) delete(dialer *Dialer) (deleted bool) {
@@ -82,6 +83,7 @@ func (d *Dialers) delete(dialer *Dialer) (deleted bool) {
 			}
 		}
 	}
+	// fmt.Println(`-------------------delete`, key, deleted)
 	return
 }
 func (d *Dialers) Fail(dialer *Dialer) (n int, deleted bool) {

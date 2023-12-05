@@ -48,6 +48,7 @@ func Next(ip net.IP) net.IP {
 				}
 			}
 		}
+		next = make([]byte, 4)
 		next[0], next[1], next[2], next[3] = a, b, c, d
 	}
 	return next
