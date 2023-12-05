@@ -1,6 +1,8 @@
 package backend
 
-import "net"
+import (
+	"net"
+)
 
 type Source interface {
 	Servers() ([]Server, error)
@@ -11,14 +13,14 @@ type Server interface {
 	Next(net.IP) net.IP
 }
 type rangeServer struct {
-	states []serverState
+	states []*serverState
 	i      int
 }
 
 func newRangeServer(server []Server) *rangeServer {
-	states := make([]serverState, len(server))
+	states := make([]*serverState, len(server))
 	for i := 0; i < len(server); i++ {
-		states[i] = serverState{
+		states[i] = &serverState{
 			ip:     server[i].IP(),
 			server: server[i],
 		}
@@ -28,21 +30,22 @@ func newRangeServer(server []Server) *rangeServer {
 	}
 }
 func (r *rangeServer) Get() (ip net.IP) {
-	for len(r.states) != 0 {
-		if r.i >= len(r.states) {
+	count := len(r.states)
+	for count != 0 {
+		if r.i >= count {
 			r.i = 0
 		}
+
 		state := r.states[r.i]
 		ip = state.Get()
 		if ip != nil {
 			r.i++
 			break
 		}
-		last := len(r.states) - 1
-		if r.i != last {
-			r.states[r.i] = r.states[last]
-		}
+		last := count - 1
+		r.states[r.i] = r.states[last]
 		r.states = r.states[:last]
+		count = last
 	}
 	return
 }
